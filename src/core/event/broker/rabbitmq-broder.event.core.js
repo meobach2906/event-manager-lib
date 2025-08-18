@@ -11,6 +11,8 @@ class EventRabbitMQBroker {
     const broker = new EventRabbitMQBroker({ connection });
 
     broker.channel = await broker.connection.createChannel();
+
+    return broker;
   }
   
   constructor({ connection }) {
@@ -31,7 +33,7 @@ class EventRabbitMQBroker {
       _.set(config, 'arguments["x-message-ttl"]', listener.ttl_message);
     }
 
-    await this.channel.assertQueue(listener.code, config);
+    return await this.channel.assertQueue(listener.code, config);
   }
 
   async listener({ listener }) {
@@ -102,7 +104,7 @@ class EventRabbitMQBroker {
               worker_index = _do.hash_to_number(value) % listener.multi_worker.worker_number;
             }
   
-            if (_is.integer(worker_index) || worker_index >= listener.multi_worker.worker_number || worker_index < 0) {
+            if (!_is.integer(worker_index) || worker_index >= listener.multi_worker.worker_number || worker_index < 0) {
               throw new Error(`Invalid worker_index`);
             }
 
@@ -140,8 +142,6 @@ class EventRabbitMQBroker {
     await this.channel.assertExchange(event.code, 'topic', event.config);
 
     for (const listener of listeners) {
-      await this.channel.assertQueue(listener.code, { durable: true });
-
       await this.channel.bindQueue(listener.code, event.code, event.code);
     }
   }

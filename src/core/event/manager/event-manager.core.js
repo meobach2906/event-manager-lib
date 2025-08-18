@@ -12,8 +12,8 @@ schema_validator.compile({
         multi_process: { type: 'number', nullable: true, check: { min: 2, max: 5 } },
         multi_worker: { type: 'object', nullable: true, properties: {
           worker_number: { type: 'number', require: true, check: { min: 1, max: 9 } },
-          distribute: { type: 'function' },
-          keys: { type: 'array', check: { min_length: 1 } }
+          distribute: { type: 'function', require: false },
+          keys: { type: 'array', element: { type: 'string' }, require: false, check: { min_length: 1 } }
         }},
         alternate_listener: { type: 'string', nullable: true, check: ({ info: { input, root, field }, value }) => {
           const result = { errors: [] };
@@ -23,15 +23,15 @@ schema_validator.compile({
           return result;
         }},
         retryable: { type: 'boolean', default: true },
-        max_retry_times: { type: 'integer', default: null, nullable: true, check: ({ info: { root, field }, value }) => {
+        max_retry_times: { type: 'integer', nullable: true, check: ({ info: { root, field }, value }) => {
           const result = { errors: [] };
           if (value && !root.retryable) {
             result.errors.push({ field, invalid: 'listener unretryable' });
           }
           return result;
         } },
-        ttl_message: { type: 'integer', default: null },
-        config: { type: 'object', default: { durable: true }}
+        ttl_message: { type: 'integer', nullable: true },
+        config: { type: 'object', default: { durable: true }, properties: {}}
       },
     }
   }
@@ -42,7 +42,7 @@ schema_validator.compile({
   schema: {
     code: { type: 'string', require: true, nullable: false },
     setting: { type: 'object', default: {}, properties: {
-      config: { type: 'object', default: { durable: true }}
+      config: { type: 'object', default: { durable: true }, properties: {}}
     }},
     listener_codes: [{ type: 'string', require: true, nullable: false }]
   }
@@ -58,11 +58,13 @@ const EventManagerFactory = ({ broker }) => {
     addListener: async function (listener = {
       code,
       setting: {
-        multi_process: null, // { process_number: <number>, distribute: <function>, keys: <array> },
+        multi_process: null,
+        multi_worker: null,
+        alternate_listener: null,
         retryable: true,
         max_retry_times: null,
-        alternate_listener: null,
         ttl_message: null,
+        config: { durable: true }
       },
       handler,
     }) {
@@ -87,7 +89,7 @@ const EventManagerFactory = ({ broker }) => {
 
       await broker.createListener({ listener: _private.listeners[code] })
     },
-    addEvent: async function (event = { code, listener_codes: [] }) {
+    addEvent: async function (event = { code, setting: { config }, listener_codes: [] }) {
       if (_private.events[event.code]) {
         throw new Error(`Event ${event.code} already exist`);
       }
@@ -110,7 +112,7 @@ const EventManagerFactory = ({ broker }) => {
         listener_codes: listener_codes
       };
 
-      await broker.bindingListener({ event, listeners });
+      await broker.bindingListener({ event: _private.events[code], listeners });
     },
     addListenerToEvent: async function ({ event_code, listener_code }) {
       if (!_private.events[event_code]) {
@@ -123,7 +125,7 @@ const EventManagerFactory = ({ broker }) => {
 
       _private.events[event_code].listener_codes.push(listener_code);
 
-      await broker.bindingListener({ event: _private.events[event_code], listeners: _private.listeners[listener_code] });
+      await broker.bindingListener({ event: _private.events[event_code], listeners: [_private.listeners[listener_code]] });
 
     },
     emit: async function({ event_code, data }) {
