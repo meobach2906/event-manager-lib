@@ -9,7 +9,7 @@ schema_validator.compile({
       type: 'object',
       default: {},
       properties: {
-        multi_process: { type: 'number', nullable: true, check: { min: 2, max: 5 } },
+        multi_process: { type: 'number', default: 1, check: { min: 1, max: 5 } },
         multi_worker: { type: 'object', nullable: true, properties: {
           worker_number: { type: 'number', require: true, check: { min: 1, max: 9 } },
           distribute: { type: 'function', require: false },
@@ -58,7 +58,7 @@ const EventManagerFactory = ({ broker }) => {
     addListener: async function (listener = {
       code,
       setting: {
-        multi_process: null,
+        multi_process: 1,
         multi_worker: null,
         alternate_listener: null,
         retryable: true,

@@ -45,6 +45,10 @@ class EventRabbitMQBroker {
       _.set(config, 'arguments["x-message-ttl"]', listener.ttl_message);
     }
 
+    if (!listener.multi_process || listener.multi_process === 1) {
+      channel.prefetch(1);
+    }
+
     if (listener.multi_process > 1) {
       channel.prefetch(listener.multi_process);
     }
@@ -56,6 +60,10 @@ class EventRabbitMQBroker {
         const channel = await this.connection.createChannel();
 
         await channel.assertQueue(`${listener.code}-${worker_index}`, config);
+
+        if (!listener.multi_process || listener.multi_process === 1) {
+          channel.prefetch(1);
+        }
 
         if (listener.multi_process > 1) {
           channel.prefetch(listener.multi_process);
@@ -95,11 +103,11 @@ class EventRabbitMQBroker {
           if (listener.multi_worker && listener.multi_worker.worker_number > 0) {
             let worker_index = null;
             if (listener.multi_worker.distribute && _is.function(listener.multi_worker.distribute)) {
-              worker_index = listener.multi_worker.distribute({ data });
+              worker_index = listener.multi_worker.distribute({ data: data.data, metadata: data.metadata });
             } else {
               const keys = _is.filled_array(listener.multi_worker.keys) ? listener.multi_worker.keys : listener.multi_worker.keys.split(',');
   
-              const value = keys.map(key => data[key] || '').join('-');
+              const value = keys.map(key => data.data[key] || '').join('-');
   
               worker_index = _do.hash_to_number(value) % listener.multi_worker.worker_number;
             }
