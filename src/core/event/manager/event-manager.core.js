@@ -1,39 +1,16 @@
 const schema_validator = require('schema-validator-lib');
 
+const _CONST = require('../../../utils/share/_CONST.utils.share');
+const _ERR = require('../../../utils/share/_ERR.utils.share');
+
 schema_validator.compile({
   code: 'ADD_LISTENER',
   schema: {
     code: { type: 'string', require: true, nullable: false },
+    transporter: { type: 'object', require: true, nullable: false, properties: {
+      CODE: { type: 'string', require: true, nullable: false, enum: Object.values(_CONST.EVENT.TRANSPORTER) }
+    }},
     handler: { type: 'async_function', require: true, nullable: true },
-    setting: {
-      type: 'object',
-      default: {},
-      properties: {
-        multi_process: { type: 'number', default: 1, check: { min: 1, max: 5 } },
-        multi_worker: { type: 'object', nullable: true, properties: {
-          worker_number: { type: 'number', require: true, check: { min: 1, max: 9 } },
-          distribute: { type: 'function', require: false },
-          keys: { type: 'array', element: { type: 'string' }, require: false, check: { min_length: 1 } }
-        }},
-        alternate_listener: { type: 'string', nullable: true, check: ({ info: { input, root, field }, value }) => {
-          const result = { errors: [] };
-          if (value === input.code) {
-            result.errors.push({ field, invalid: 'alternate_listener equal listener code' });
-          }
-          return result;
-        }},
-        retryable: { type: 'boolean', default: true },
-        max_retry_times: { type: 'integer', nullable: true, check: ({ info: { root, field }, value }) => {
-          const result = { errors: [] };
-          if (value && !root.retryable) {
-            result.errors.push({ field, invalid: 'listener unretryable' });
-          }
-          return result;
-        } },
-        ttl_message: { type: 'integer', nullable: true },
-        config: { type: 'object', default: { durable: true }, properties: {}}
-      },
-    }
   }
 })
 
@@ -42,79 +19,66 @@ schema_validator.compile({
   schema: {
     code: { type: 'string', require: true, nullable: false },
     setting: { type: 'object', default: {}, properties: {
-      config: { type: 'object', default: { durable: true }, properties: {}}
+      default_exchange_config: { type: 'object', default: { durable: true }, properties: {}}
     }},
     listener_codes: [{ type: 'string', require: true, nullable: false }]
   }
 })
 
-const EventManagerFactory = ({ broker }) => {
+const EventManagerFactory = () => {
   const _private = {
     events: {},
     listeners: {},
   };
 
   const _public = {
-    addListener: async function (listener = {
-      code,
-      setting: {
-        multi_process: 1,
-        multi_worker: null,
-        alternate_listener: null,
-        retryable: true,
-        max_retry_times: null,
-        ttl_message: null,
-        config: { durable: true }
-      },
-      handler,
-    }) {
+    addListener: function ({ listener }) {
+
+      listener = schema_validator.assert_validate({ code: 'ADD_LISTENER', input: listener });
 
       if (_private.listeners[listener.code]) {
         throw new Error(`Listener ${listener.code} already exist`);
       }
 
-      const { code, setting, handler } = schema_validator.assert_validate({ code: 'ADD_LISTENER', input: listener })
-
-      if (setting.alternate_listener) {
-        if (!_private.listeners[setting.alternate_listener]) {
-          throw new Error(`Alternative Listener ${setting.alternate_listener} not exist`);
+      if (listener.transporter === _CONST.EVENT.TRANSPORTER.RABBITMQ && listener.fallback_listener) {
+        if (!_private.listeners[listener.fallback_listener]) {
+          throw new Error(`Fallback Listener ${setting.fallback_listener} not exist`);
         }
       }
 
-      _private.listeners[code] = Object.freeze({
-        code: code,
-        ...setting,
-        handler,
-      });
-
-      await broker.createListener({ listener: _private.listeners[code] })
+      _private.listeners[listener.code] = listener;
     },
-    addEvent: async function (event = { code, setting: { config }, listener_codes: [] }) {
+    addEvent: function (event = { code, listener_codes: [] }) {
       if (_private.events[event.code]) {
         throw new Error(`Event ${event.code} already exist`);
       }
 
-      const { code, setting, listener_codes } = schema_validator.assert_validate({ code: 'ADD_EVENT', input: event })
+      const { code, listener_codes } = schema_validator.assert_validate({ code: 'ADD_EVENT', input: event })
 
 
       const listeners = [];
+      const transporters = [];
 
       for (const listener_code of listener_codes) {
-        if (!_private.listeners[listener_code]) {
+        const listener = _private.listeners[listener_code];
+        if (!listener) {
           throw new Error(`Listener ${listener_code} already exist`);
         }
-        listeners.push(_private.listeners[listener_code]);
+        listeners.push(listener);
+        if (!transporters.find(transporter => transporter.CODE === listener.transporter.CODE)) {
+          transporters.push(listener.transporter);
+        }
       }
 
       _private.events[code] = {
         code: code,
-        ...setting,
-        listener_codes: listener_codes
+        listener_codes: listener_codes,
+        listeners: listeners,
+        transporters,
       };
 
-      await broker.bindingListener({ event: _private.events[code], listeners });
     },
-    addListenerToEvent: async function ({ event_code, listener_code }) {
+    addListenerToEvent: function ({ event_code, listener_code }) {
       if (!_private.events[event_code]) {
         throw new Error(`Event ${event_code} not exist`);
       }
@@ -124,21 +88,61 @@ const EventManagerFactory = ({ broker }) => {
       }
 
       _private.events[event_code].listener_codes.push(listener_code);
+      _private.events[event_code].listeners.push(_private.listeners[listener_code]);
+    },
+    start: async function() {
+      for (const listener of Object.values(_private.listeners)) {
+        await listener.transporter.createListener({ listener });
+      }
 
-      await broker.bindingListener({ event: _private.events[event_code], listeners: [_private.listeners[listener_code]] });
-
+      for (const event of Object.values(_private.events)) {
+        for (const listener of event.listeners) {
+          await listener.transporter.bindingListener({ event, listener });
+        }
+      }
     },
     emit: async function({ event_code, data }) {
-      return broker.emit({ event_code, data })
+      const event = _private.events[event_code];
+      if (!event) {
+        throw new Error(`Event ${event_code} not found`);
+      }
+      for (const transporter of event.transporters) {
+        await transporter.emit({ event, data })
+      }
     },
-    sendToQueue: async function({ listener_code, data }) {
-      return broker.sendToQueue({ listener_code, data })
+    sendToListener: async function({ listener_code, data, metadata = {} }) {
+      const listener = _private.listeners[listener_code];
+      if (!listener) {
+        throw new Error(`Listener ${listener_code} not found`);
+      }
+      return listener.transporter.sendToListener({ listener, data, metadata })
     },
     listen: async function () {
-      for (const listener_code in _private.listeners) {
-        await broker.listener({ listener: _private.listeners[listener_code] });
+      for (const listener of Object.values(_private.listeners)) {
+        const result = await listener.transporter.listen({ listener: listener, event_manager: _public });
+        if (listener.transporter.CODE === _CONST.EVENT.TRANSPORTER.RABBITMQ) {
+          listener.channels = result.channels;
+        }
       }
-    }
+    },
+    stopListen: async function({ listener_code }) {
+      const listener = _private.listeners[listener_code];
+      if (!listener) {
+        throw new Error(`Listener ${listener_code} not found`);
+      }
+      await listener.transporter.stopListen({ listener: listener });
+    },
+    stopListenAll: async function() {
+      for (const listener of Object.values(_private.listeners)) {
+        await listener.transporter.stopListen({ listener: listener });
+      }
+    },
+    throwError: (reason) => {
+      throw new _ERR.ERR(reason);
+    },
+    throwRetryableError: (reason) => {
+      throw new _ERR.TEMPORARILY_ERR(reason);
+    },
   };
 
   return _public;

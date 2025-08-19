@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha"
   },
   "repository": {
     "type": "git",
@@ -17,8 +17,22 @@
   },
   "homepage": "https://github.com/meobach2906/event-manager-lib#readme",
   "dependencies": {
-    "amqplib": "^0.10.8",
     "lodash": "^4.17.21",
     "schema-validator-lib": "^1.0.2"
+  },
+  "devDependencies": {
+    "chai": "^5.2.1",
+    "amqplib": "^0.10.8",
+    "mocha": "^11.7.1"
+  },
+  "mocha": {
+    "require": [
+      "chai/register-expect.js,chai/register-expect.js,chai/register-assert.js"
+    ],
+    "spec": "./test/**/*.spec.js",
+    "extension": [
+      "js"
+    ],
+    "recursive": true
   }
 }
